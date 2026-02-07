@@ -30,8 +30,8 @@
     "morgan": "^1.10.0",
     "pdfkit": "^0.13.0",
     "qrcode": "^1.5.3",
-    "socket.io": "^4.6.1",
-    "socket.io-client": "^4.8.3",
+    "socket.io": "^2.4.1",
+    "socket.io-client": "^2.4.1",
     "uuid": "^13.0.0"
   },
   "devDependencies": {

@@ -29,9 +29,9 @@ const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 // Backend Server - UPDATE WITH YOUR SERVER IP/DOMAIN
 // For local testing: Use your computer's local IP (e.g., 192.168.1.100)
 // For production: Use your server domain (e.g., api.yourlocker.com)
-const char* SERVER_HOST = "192.168.1.100";  // Change this!
-const int SERVER_PORT = 5000;
-const bool USE_SSL = false;  // Set true for production with HTTPS
+const char* SERVER_HOST = "smart-locker-c3vr.onrender.com";  // Production backend
+const int SERVER_PORT = 443; // HTTPS port
+const bool USE_SSL = true;   // Enable SSL for production
 
 // Rack Configuration - Each ESP32 controls one rack
 const char* RACK_ID = "RACK_001";  // Must match MongoDB rack rackNumber
