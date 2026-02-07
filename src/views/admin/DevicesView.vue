@@ -280,7 +280,7 @@ const loading = ref(true)
 const socket = ref(null)
 const wsConnected = ref(false)
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
+const API_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
 const WS_URL = import.meta.env.VITE_WS_URL || 'http://localhost:5000'
 
 // Computed stats
