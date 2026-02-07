@@ -47,6 +47,11 @@ app.use(cors({
     // Allow requests with no origin (mobile apps, curl, ESP32, etc.)
     if (!origin) return callback(null, true);
     
+    // Allow Vercel preview/production URLs
+    if (origin.endsWith('.vercel.app') || origin.endsWith('.onrender.com')) {
+      return callback(null, true);
+    }
+    
     if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
       callback(null, true);
     } else {
