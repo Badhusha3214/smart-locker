@@ -11,7 +11,7 @@
 const char* WIFI_SSID = "Robot";
 const char* WIFI_PASSWORD = "Robot123";
 const char* SERVER_HOST = "smart-locker-c3vr.onrender.com";
-const int SERVER_PORT = 443;
+const int SERVER_PORT = 5000;
 
 SocketIOclient socketIO;
 
@@ -36,8 +36,8 @@ void setup() {
     return;
   }
 
-  // Connect to Socket.IO backend (SSL)
-  socketIO.beginSSL(SERVER_HOST, SERVER_PORT, "/socket.io/?transport=websocket");
+  // Connect to Socket.IO backend (HTTP, not SSL)
+  socketIO.begin(SERVER_HOST, 10000, "/socket.io/?transport=websocket"); // Use your actual Render HTTP port
   socketIO.onEvent(socketIOEvent);
 }
 

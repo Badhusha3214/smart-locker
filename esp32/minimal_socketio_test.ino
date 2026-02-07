@@ -36,8 +36,8 @@ void setup() {
     return;
   }
 
-  // Connect to Socket.IO backend (SSL)
-  socketIO.beginSSL(SERVER_HOST, SERVER_PORT, "/socket.io/?transport=websocket");
+  // Connect to Socket.IO backend (SSL, Render public endpoint)
+  socketIO.beginSSL(SERVER_HOST, 443, "/socket.io/?transport=websocket"); // Use your actual Render HTTP port
   socketIO.onEvent(socketIOEvent);
 }
 
