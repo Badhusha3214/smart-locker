@@ -68,8 +68,8 @@ const initializeWebSocket = (server) => {
 
   // Optional: Authentication middleware
   io.use((socket, next) => {
-    const token = socket.handshake.auth.token;
-    
+    const auth = socket.handshake.auth || {};
+    const token = auth.token;
     if (token) {
       try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -79,7 +79,6 @@ const initializeWebSocket = (server) => {
         console.log('WebSocket: Invalid token, connecting as guest');
       }
     }
-    
     next();
   });
 
