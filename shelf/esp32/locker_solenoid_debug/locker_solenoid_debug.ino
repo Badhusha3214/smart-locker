@@ -1,59 +1,102 @@
 /*
- * Smart QR-Controlled Locker System - ESP32 Controller (SOLENOID VERSION)
+ * Smart QR-Controlled Locker System - ESP32 SHELF Controller
  * 
  * ═══════════════════════════════════════════════════════════════════════
- * DEBUG VERSION - Enhanced logging for troubleshooting
+ * MULTI-DOOR VERSION - 1 ESP32 controls 9-12 doors on a shelf
  * ═══════════════════════════════════════════════════════════════════════
  * 
- * Hardware Connections:
- * - Relay Module IN: GPIO 13 (controls solenoid)
- * - IR Sensor (item detection): GPIO 14
+ * Hardware Setup:
+ * - Uses relay modules or shift registers to control multiple solenoids
+ * - Each door has its own relay channel
+ * - IR sensors for each locker to detect items
+ * 
+ * Pin Configuration (using direct GPIO - 12 doors max):
+ * - Door 1:  GPIO 13 (Relay), GPIO 14 (IR Sensor)
+ * - Door 2:  GPIO 27 (Relay), GPIO 26 (IR Sensor)
+ * - Door 3:  GPIO 25 (Relay), GPIO 33 (IR Sensor)
+ * - Door 4:  GPIO 32 (Relay), GPIO 35 (IR Sensor)
+ * - Door 5:  GPIO 23 (Relay), GPIO 34 (IR Sensor)
+ * - Door 6:  GPIO 22 (Relay), GPIO 39 (IR Sensor)
+ * - Door 7:  GPIO 21 (Relay), GPIO 36 (IR Sensor)
+ * - Door 8:  GPIO 19 (Relay)
+ * - Door 9:  GPIO 18 (Relay)
+ * - Door 10: GPIO 5  (Relay)
+ * - Door 11: GPIO 4  (Relay)
+ * - Door 12: GPIO 16 (Relay)
+ * 
  * - Status LED: GPIO 2 (built-in)
- * - Buzzer: GPIO 15 (optional)
- * 
- * Serial Commands for Testing:
- * - 'u' or 'U' : Unlock
- * - 'l' or 'L' : Lock
- * - 's' or 'S' : Print status
- * - 'r' or 'R' : Reconnect WebSocket
- * - 'd' or 'D' : Toggle debug mode
- * - 'h' or 'H' : Show help
- * - 't' or 'T' : Test all hardware
+ * - Buzzer: GPIO 15
  */
 
 #include <WiFi.h>
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 
-// ============== DEBUG CONFIGURATION ==============
-#define DEBUG_ENABLED true       // Master debug switch
-#define DEBUG_WIFI true          // WiFi connection logs
-#define DEBUG_WEBSOCKET true     // WebSocket message logs
-#define DEBUG_SENSOR true        // Sensor reading logs
-#define DEBUG_RELAY true         // Relay/lock state logs
-#define DEBUG_HEARTBEAT false    // Heartbeat logs (can be noisy)
-#define DEBUG_TIMING true        // Timing/performance logs
-
-// Debug log levels
-#define LOG_ERROR   0
-#define LOG_WARN    1
-#define LOG_INFO    2
-#define LOG_DEBUG   3
-#define LOG_VERBOSE 4
-
-int currentLogLevel = LOG_DEBUG;  // Change to control verbosity
-
 // ============== CONFIGURATION ==============
-const char* WIFI_SSID = "KERALA_VISION_UCV_12";
-const char* WIFI_PASSWORD = "Shajee@1423";
-const char* SERVER_HOST = "192.168.1.6";
+const char* WIFI_SSID = "Robot";
+const char* WIFI_PASSWORD = "Robot123";
+const char* SERVER_HOST = "35.225.93.34";  //10.229.233.58
 const int SERVER_PORT = 5000;
 const bool USE_SSL = false;
-const char* RACK_ID = "RACK-001";  // Must match rackNumber in database!
 
-// Hardware Pins
-#define RELAY_PIN 13
-#define IR_SENSOR_PIN 14
+// Shelf Configuration
+const char* SHELF_ID = "SHELF_001";     // Unique shelf identifier
+const int NUM_DOORS = 9;                 // Number of doors on this shelf (9 or 12)
+
+// Rack IDs for each door - MUST match database rackNumber!
+const char* RACK_IDS[12] = {
+  "RACK-001",  // Door 0
+  "RACK-002",  // Door 1
+  "RACK-003",  // Door 2
+  "RACK-004",  // Door 3
+  "RACK-005",  // Door 4
+  "RACK-006",  // Door 5
+  "RACK-007",  // Door 6
+  "RACK-008",  // Door 7
+  "RACK-009",  // Door 8
+  "RACK-010",  // Door 9
+  "RACK-011",  // Door 10
+  "RACK-012"   // Door 11
+};
+
+// Relay pins for each door
+const int RELAY_PINS[12] = {
+  13,  // Door 0
+  27,  // Door 1
+  25,  // Door 2
+  32,  // Door 3
+  23,  // Door 4
+  22,  // Door 5
+  21,  // Door 6
+  19,  // Door 7
+  18,  // Door 8
+  5,   // Door 9
+  4,   // Door 10
+  16   // Door 11
+};
+
+// ============== IR SENSOR CONFIGURATION ==============
+// Set to false to disable all IR sensors (for future use)
+#define IR_SENSORS_ENABLED false
+
+// IR Sensor pins (if using sensors - set to -1 if not connected)
+// Uncomment IR_SENSORS_ENABLED = true above when ready to use
+const int IR_SENSOR_PINS[12] = {
+  14,  // Door 0
+  26,  // Door 1
+  33,  // Door 2
+  35,  // Door 3
+  34,  // Door 4
+  39,  // Door 5
+  36,  // Door 6
+  -1,  // Door 7 (no sensor)
+  -1,  // Door 8 (no sensor)
+  -1,  // Door 9 (no sensor)
+  -1,  // Door 10 (no sensor)
+  -1   // Door 11 (no sensor)
+};
+
+// Common pins
 #define LED_PIN 2
 #define BUZZER_PIN 15
 
@@ -62,75 +105,40 @@ const char* RACK_ID = "RACK-001";  // Must match rackNumber in database!
 #define LOCK_STATE LOW
 
 // Timing
-#define UNLOCK_DURATION 30000     // Keep unlocked for 30 seconds
-#define SENSOR_CHECK_INTERVAL 1000
+#define UNLOCK_DURATION 30000        // Auto-lock after 30 seconds
+#define SENSOR_CHECK_INTERVAL 1000   // Check sensors every 1 second (only if IR_SENSORS_ENABLED)
 #define RECONNECT_INTERVAL 5000
 #define HEARTBEAT_INTERVAL 30000
-#define STATUS_PRINT_INTERVAL 10000  // Print status every 10s in debug
+#define SENSOR_DEBOUNCE_TIME 500
 
 // ============== GLOBAL VARIABLES ==============
 WebSocketsClient webSocket;
 
-bool isConnected = false;
-bool socketIOConnected = false;  // Socket.IO namespace connected
-bool isLocked = true;
-bool itemPresent = false;
-bool lastItemState = false;
-bool debugMode = DEBUG_ENABLED;
+// Door states
+bool doorLocked[12];          // Lock state for each door
+bool itemPresent[12];         // Item present in each locker
+bool lastItemState[12];       // For debouncing
+unsigned long unlockTime[12]; // When each door was unlocked
+unsigned long lastSensorChange[12];
+bool hasPendingChange[12];
+bool pendingSensorState[12];
 
-unsigned long unlockTime = 0;
+// Connection states
+bool isConnected = false;
+bool socketIOConnected = false;
+
+// Timing
 unsigned long lastSensorCheck = 0;
 unsigned long lastHeartbeat = 0;
-unsigned long lastStatusPrint = 0;
-unsigned long bootTime = 0;
-unsigned long lastSensorChange = 0;  // For debouncing
-
-// Debounce settings
-#define SENSOR_DEBOUNCE_TIME 500  // 500ms debounce
-bool pendingSensorState = false;
-bool hasPendingChange = false;
-
-// Statistics for debugging
-unsigned long wsMessagesReceived = 0;
-unsigned long wsMessagesSent = 0;
-unsigned long wifiReconnects = 0;
-unsigned long wsReconnects = 0;
-unsigned long lockUnlockCycles = 0;
-unsigned long sensorChanges = 0;
-
-// ============== DEBUG LOGGING FUNCTIONS ==============
-void logPrint(int level, const char* tag, String message) {
-  if (!debugMode || level > currentLogLevel) return;
-  
-  String prefix = "";
-  switch(level) {
-    case LOG_ERROR:   prefix = "[ERROR]"; break;
-    case LOG_WARN:    prefix = "[WARN] "; break;
-    case LOG_INFO:    prefix = "[INFO] "; break;
-    case LOG_DEBUG:   prefix = "[DEBUG]"; break;
-    case LOG_VERBOSE: prefix = "[VERB] "; break;
-  }
-  
-  unsigned long uptime = millis() / 1000;
-  Serial.printf("%s [%lus] [%s] %s\n", prefix.c_str(), uptime, tag, message.c_str());
-}
-
-void logError(const char* tag, String msg) { logPrint(LOG_ERROR, tag, msg); }
-void logWarn(const char* tag, String msg) { logPrint(LOG_WARN, tag, msg); }
-void logInfo(const char* tag, String msg) { logPrint(LOG_INFO, tag, msg); }
-void logDebug(const char* tag, String msg) { logPrint(LOG_DEBUG, tag, msg); }
-void logVerbose(const char* tag, String msg) { logPrint(LOG_VERBOSE, tag, msg); }
 
 // ============== SETUP ==============
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  bootTime = millis();
   
   printBanner();
-  printSystemInfo();
   
-  // Initialize pins with debug output
+  // Initialize all doors
   initializeHardware();
   
   // Connect to WiFi
@@ -140,646 +148,451 @@ void setup() {
   connectWebSocket();
   
   // Initial sensor read
-  itemPresent = digitalRead(IR_SENSOR_PIN) == LOW;
-  lastItemState = itemPresent;
-  logInfo("SENSOR", "Initial state: " + String(itemPresent ? "ITEM PRESENT" : "EMPTY"));
+  for (int i = 0; i < NUM_DOORS; i++) {
+    if (IR_SENSOR_PINS[i] >= 0) {
+      itemPresent[i] = digitalRead(IR_SENSOR_PINS[i]) == LOW;
+      lastItemState[i] = itemPresent[i];
+    }
+  }
   
-  // Startup complete
   beep(2, 100);
-  printStartupComplete();
+  Serial.println("\n>>> Shelf controller ready! <<<\n");
 }
 
 void printBanner() {
   Serial.println("\n");
   Serial.println("╔════════════════════════════════════════════════════════════╗");
-  Serial.println("║     SMART LOCKER SYSTEM - ESP32 CONTROLLER                 ║");
-  Serial.println("║     SOLENOID LOCK VERSION - DEBUG MODE                     ║");
+  Serial.println("║     SMART LOCKER SYSTEM - SHELF CONTROLLER                 ║");
+  Serial.println("║     MULTI-DOOR VERSION                                     ║");
   Serial.println("╠════════════════════════════════════════════════════════════╣");
-  Serial.println("║  Serial Commands:                                          ║");
-  Serial.println("║    u=Unlock  l=Lock  s=Status  r=Reconnect                 ║");
-  Serial.println("║    d=Debug toggle  h=Help  t=Test hardware                 ║");
+  Serial.printf("║  Shelf ID:    %s                                     ║\n", SHELF_ID);
+  Serial.printf("║  Doors:       %d                                            ║\n", NUM_DOORS);
+  Serial.println("╠════════════════════════════════════════════════════════════╣");
+  Serial.println("║  Commands: u<n>=Unlock door n, l<n>=Lock, s=Status         ║");
   Serial.println("╚════════════════════════════════════════════════════════════╝");
   Serial.println();
 }
 
-void printSystemInfo() {
-  Serial.println("┌─────────────────── SYSTEM INFO ───────────────────┐");
-  Serial.printf("│ Chip Model:     %s                          │\n", ESP.getChipModel());
-  Serial.printf("│ Chip Revision:  %d                                  │\n", ESP.getChipRevision());
-  Serial.printf("│ CPU Frequency:  %d MHz                             │\n", ESP.getCpuFreqMHz());
-  Serial.printf("│ Flash Size:     %d MB                               │\n", ESP.getFlashChipSize() / 1024 / 1024);
-  Serial.printf("│ Free Heap:      %d bytes                       │\n", ESP.getFreeHeap());
-  Serial.printf("│ SDK Version:    %s                          │\n", ESP.getSdkVersion());
-  Serial.println("├───────────────────────────────────────────────────┤");
-  Serial.printf("│ Rack ID:        %s                            │\n", RACK_ID);
-  Serial.printf("│ Server:         %s:%d                    │\n", SERVER_HOST, SERVER_PORT);
-  Serial.printf("│ SSL Enabled:    %s                                │\n", USE_SSL ? "Yes" : "No");
-  Serial.println("└───────────────────────────────────────────────────┘\n");
-}
-
 void initializeHardware() {
-  Serial.println("┌─────────────── HARDWARE INITIALIZATION ───────────────┐");
+  Serial.println("Initializing hardware...");
   
-  // Relay Pin
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOCK_STATE);
-  isLocked = true;
-  Serial.printf("│ ✓ RELAY_PIN (GPIO %d) - OUTPUT - Set to LOCK_STATE    │\n", RELAY_PIN);
-  
-  // LED Pin
+  // Initialize LED
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
-  Serial.printf("│ ✓ LED_PIN (GPIO %d) - OUTPUT - Set to LOW             │\n", LED_PIN);
   
-  // Buzzer Pin
+  // Initialize Buzzer
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
-  Serial.printf("│ ✓ BUZZER_PIN (GPIO %d) - OUTPUT - Set to LOW          │\n", BUZZER_PIN);
   
-  // IR Sensor Pin
-  pinMode(IR_SENSOR_PIN, INPUT);
-  int sensorReading = digitalRead(IR_SENSOR_PIN);
-  Serial.printf("│ ✓ IR_SENSOR_PIN (GPIO %d) - INPUT - Reading: %d        │\n", IR_SENSOR_PIN, sensorReading);
+  // Initialize each door
+  for (int i = 0; i < NUM_DOORS; i++) {
+    // Relay pin
+    pinMode(RELAY_PINS[i], OUTPUT);
+    digitalWrite(RELAY_PINS[i], LOCK_STATE);
+    doorLocked[i] = true;
+    unlockTime[i] = 0;
+    hasPendingChange[i] = false;
+    
+    Serial.printf("  Door %d: Relay GPIO %d", i, RELAY_PINS[i]);
+    
+    // IR Sensor pin (if available and enabled)
+    #if IR_SENSORS_ENABLED
+    if (IR_SENSOR_PINS[i] >= 0) {
+      pinMode(IR_SENSOR_PINS[i], INPUT);
+      Serial.printf(", Sensor GPIO %d", IR_SENSOR_PINS[i]);
+    }
+    #endif
+    
+    Serial.printf(" → %s\n", RACK_IDS[i]);
+  }
   
-  Serial.println("└────────────────────────────────────────────────────────┘\n");
-}
-
-void printStartupComplete() {
-  unsigned long startupTime = millis() - bootTime;
-  Serial.println("\n┌─────────────── STARTUP COMPLETE ───────────────┐");
-  Serial.printf("│ Startup Time:    %lu ms                          \n", startupTime);
-  Serial.printf("│ WiFi Connected:  %s                             \n", WiFi.status() == WL_CONNECTED ? "Yes" : "No");
-  Serial.printf("│ WebSocket:       %s                         \n", isConnected ? "Connected" : "Connecting...");
-  Serial.printf("│ Lock State:      %s                          \n", isLocked ? "LOCKED" : "UNLOCKED");
-  Serial.printf("│ Item Present:    %s                             \n", itemPresent ? "Yes" : "No");
-  Serial.println("└─────────────────────────────────────────────────┘\n");
-  Serial.println(">>> System ready. Waiting for commands...\n");
+  Serial.println("Hardware initialized!\n");
 }
 
 // ============== MAIN LOOP ==============
 void loop() {
-  unsigned long loopStart = millis();
-  
-  // Handle WebSocket events
   webSocket.loop();
   
-  // Check WiFi connection
-  checkWiFiConnection();
-  
-  // Auto-lock after timeout
-  checkAutoLock();
-  
-  // Check item sensor periodically
-  if (millis() - lastSensorCheck > SENSOR_CHECK_INTERVAL) {
-    lastSensorCheck = millis();
-    checkItemSensor();
+  // Check WiFi
+  if (WiFi.status() != WL_CONNECTED) {
+    isConnected = false;
+    connectWiFi();
+    connectWebSocket();
   }
   
-  // Send heartbeat to server
+  // Auto-lock doors after timeout
+  for (int i = 0; i < NUM_DOORS; i++) {
+    if (!doorLocked[i] && millis() - unlockTime[i] > UNLOCK_DURATION) {
+      Serial.printf("[AUTO-LOCK] Door %d (%s)\n", i, RACK_IDS[i]);
+      lockDoor(i);
+    }
+  }
+  
+  // Check sensors (only if IR sensors are enabled)
+  #if IR_SENSORS_ENABLED
+  if (millis() - lastSensorCheck > SENSOR_CHECK_INTERVAL) {
+    lastSensorCheck = millis();
+    checkAllSensors();
+  }
+  #endif
+  
+  // Heartbeat
   if (isConnected && socketIOConnected && millis() - lastHeartbeat > HEARTBEAT_INTERVAL) {
     lastHeartbeat = millis();
     sendHeartbeat();
   }
   
-  // Debug: Print periodic status
-  if (debugMode && millis() - lastStatusPrint > STATUS_PRINT_INTERVAL) {
-    lastStatusPrint = millis();
-    printPeriodicStatus();
-  }
-  
-  // Update LED status
-  updateLED();
-  
-  // Handle serial commands
-  handleSerialCommands();
-  
-  // Debug: Log slow loop iterations
-  if (DEBUG_TIMING) {
-    unsigned long loopTime = millis() - loopStart;
-    if (loopTime > 100) {
-      logWarn("LOOP", "Slow loop iteration: " + String(loopTime) + "ms");
-    }
-  }
-}
-
-void checkWiFiConnection() {
-  if (WiFi.status() != WL_CONNECTED) {
-    if (DEBUG_WIFI) {
-      logWarn("WIFI", "Connection lost! Reconnecting...");
-    }
-    isConnected = false;
-    wifiReconnects++;
-    connectWiFi();
-    connectWebSocket();
-  }
-}
-
-void checkAutoLock() {
-  if (!isLocked && millis() - unlockTime > UNLOCK_DURATION) {
-    unsigned long unlockedFor = millis() - unlockTime;
-    logInfo("LOCK", "Auto-locking after " + String(unlockedFor / 1000) + " seconds");
-    lockLocker();
-  }
-}
-
-void updateLED() {
+  // LED status
   if (isConnected) {
-    // Slow blink when connected
     digitalWrite(LED_PIN, (millis() / 1000) % 2);
   } else {
-    // Fast blink when disconnected
     digitalWrite(LED_PIN, (millis() / 200) % 2);
   }
-}
-
-void printPeriodicStatus() {
-  unsigned long uptime = millis() / 1000;
-  Serial.println("\n┌─────────────── PERIODIC STATUS ───────────────┐");
-  Serial.printf("│ Uptime:          %lu seconds                    \n", uptime);
-  Serial.printf("│ WiFi RSSI:       %d dBm                         \n", WiFi.RSSI());
-  Serial.printf("│ Free Heap:       %d bytes                       \n", ESP.getFreeHeap());
-  Serial.printf("│ Lock State:      %s                             \n", isLocked ? "LOCKED" : "UNLOCKED");
-  Serial.printf("│ Item Present:    %s                             \n", itemPresent ? "Yes" : "No");
-  Serial.printf("│ WS Connected:    %s                             \n", isConnected ? "Yes" : "No");
-  Serial.printf("│ Socket.IO:       %s                             \n", socketIOConnected ? "Yes" : "No");
-  Serial.println("├─────────────── STATISTICS ─────────────────────┤");
-  Serial.printf("│ WS Messages Rx:  %lu                            \n", wsMessagesReceived);
-  Serial.printf("│ WS Messages Tx:  %lu                            \n", wsMessagesSent);
-  Serial.printf("│ WiFi Reconnects: %lu                            \n", wifiReconnects);
-  Serial.printf("│ WS Reconnects:   %lu                            \n", wsReconnects);
-  Serial.printf("│ Lock/Unlock:     %lu cycles                     \n", lockUnlockCycles);
-  Serial.printf("│ Sensor Changes:  %lu                            \n", sensorChanges);
-  Serial.println("└────────────────────────────────────────────────┘\n");
+  
+  // Serial commands
+  handleSerialCommands();
 }
 
 // ============== WIFI CONNECTION ==============
 void connectWiFi() {
-  logInfo("WIFI", "Connecting to: " + String(WIFI_SSID));
+  Serial.printf("[WIFI] Connecting to %s", WIFI_SSID);
   
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
   int attempts = 0;
-  int maxAttempts = 40;
-  
-  Serial.print("[WIFI] Connecting");
-  while (WiFi.status() != WL_CONNECTED && attempts < maxAttempts) {
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
     delay(500);
     Serial.print(".");
     attempts++;
-    digitalWrite(LED_PIN, attempts % 2);
-    
-    // Debug: Print WiFi status codes
-    if (DEBUG_WIFI && attempts % 10 == 0) {
-      Serial.printf("\n[WIFI] Status: %d (attempt %d/%d)", WiFi.status(), attempts, maxAttempts);
-    }
   }
   
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println();
-    logInfo("WIFI", "✓ Connected successfully!");
-    logInfo("WIFI", "IP Address: " + WiFi.localIP().toString());
-    logInfo("WIFI", "Subnet Mask: " + WiFi.subnetMask().toString());
-    logInfo("WIFI", "Gateway: " + WiFi.gatewayIP().toString());
-    logInfo("WIFI", "DNS: " + WiFi.dnsIP().toString());
-    logInfo("WIFI", "RSSI: " + String(WiFi.RSSI()) + " dBm");
-    logInfo("WIFI", "MAC Address: " + WiFi.macAddress());
-    
-    digitalWrite(LED_PIN, HIGH);
+    Serial.printf("\n[WIFI] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
     beep(1, 100);
   } else {
-    Serial.println();
-    logError("WIFI", "✗ Connection FAILED!");
-    logError("WIFI", "Status code: " + String(WiFi.status()));
-    logError("WIFI", "Possible causes:");
-    logError("WIFI", "  - Wrong SSID or password");
-    logError("WIFI", "  - WiFi network out of range");
-    logError("WIFI", "  - Router not responding");
-    
+    Serial.println("\n[WIFI] Connection failed!");
     beep(3, 200);
   }
 }
 
 // ============== WEBSOCKET CONNECTION ==============
 void connectWebSocket() {
-  logInfo("WS", "Connecting to WebSocket server...");
-  logInfo("WS", "Host: " + String(SERVER_HOST));
-  logInfo("WS", "Port: " + String(SERVER_PORT));
-  logInfo("WS", "SSL: " + String(USE_SSL ? "Enabled" : "Disabled"));
+  Serial.printf("[WS] Connecting to %s:%d\n", SERVER_HOST, SERVER_PORT);
   
-  // Use transport=websocket to skip polling upgrade
-  String wsPath = "/socket.io/?EIO=4&transport=websocket";
-  logDebug("WS", "Path: " + wsPath);
-  
+String wsPath = "/socket.io/?EIO=4&transport=websocket";
+
   if (USE_SSL) {
     webSocket.beginSSL(SERVER_HOST, 443, wsPath.c_str());
-    logInfo("WS", "Using SSL connection on port 443");
   } else {
     webSocket.begin(SERVER_HOST, SERVER_PORT, wsPath.c_str());
   }
   
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(RECONNECT_INTERVAL);
-  webSocket.enableHeartbeat(25000, 5000, 2);  // ping every 25s, timeout 5s, 2 retries
-  logDebug("WS", "Reconnect interval: " + String(RECONNECT_INTERVAL) + "ms");
+  webSocket.enableHeartbeat(25000, 5000, 2);
 }
 
 // ============== WEBSOCKET EVENT HANDLER ==============
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
-      logWarn("WS", "✗ DISCONNECTED");
+      Serial.println("[WS] Disconnected");
       isConnected = false;
       socketIOConnected = false;
-      wsReconnects++;
-      digitalWrite(LED_PIN, LOW);
       break;
       
     case WStype_CONNECTED:
-      logInfo("WS", "✓ WebSocket CONNECTED to server!");
-      logDebug("WS", "Connection URL: " + String((char*)payload));
+      Serial.println("[WS] Connected!");
       isConnected = true;
-      socketIOConnected = false;  // Wait for Socket.IO handshake
-      digitalWrite(LED_PIN, HIGH);
-      // Don't register yet - wait for Socket.IO handshake
+      socketIOConnected = false;
       break;
       
     case WStype_TEXT:
-      wsMessagesReceived++;
-      if (DEBUG_WEBSOCKET) {
-        logDebug("WS", "← RX [" + String(length) + " bytes]: " + String((char*)payload));
-      }
       handleMessage((char*)payload);
       break;
       
-    case WStype_BIN:
-      logDebug("WS", "← RX Binary [" + String(length) + " bytes]");
-      break;
-      
-    case WStype_ERROR:
-      logError("WS", "✗ ERROR occurred");
-      break;
-      
-    case WStype_FRAGMENT_TEXT_START:
-      logDebug("WS", "Fragment text start");
-      break;
-      
-    case WStype_FRAGMENT_BIN_START:
-      logDebug("WS", "Fragment binary start");
-      break;
-      
-    case WStype_FRAGMENT:
-      logDebug("WS", "Fragment received");
-      break;
-      
-    case WStype_FRAGMENT_FIN:
-      logDebug("WS", "Fragment finished");
-      break;
-      
-    case WStype_PING:
-      logVerbose("WS", "← PING");
-      break;
-      
-    case WStype_PONG:
-      logVerbose("WS", "→ PONG");
-      break;
-      
     default:
-      logWarn("WS", "Unknown event type: " + String(type));
       break;
   }
 }
 
 // ============== REGISTER WITH SERVER ==============
 void registerWithServer() {
-  logInfo("REG", "Registering with server...");
+  Serial.println("[REG] Registering shelf with server...");
   
-  StaticJsonDocument<512> doc;
-  doc["rackId"] = RACK_ID;
-  doc["type"] = "esp32";
-  doc["lockType"] = "solenoid";
-  doc["status"] = isLocked ? "locked" : "unlocked";
-  doc["itemPresent"] = itemPresent;
-  doc["firmwareVersion"] = "1.1.0-debug";
+  StaticJsonDocument<1024> doc;
+  doc["shelfId"] = SHELF_ID;
+  doc["type"] = "shelf-controller";
+  doc["numDoors"] = NUM_DOORS;
   doc["ip"] = WiFi.localIP().toString();
   doc["rssi"] = WiFi.RSSI();
-  doc["freeHeap"] = ESP.getFreeHeap();
-  doc["chipModel"] = ESP.getChipModel();
+  
+  // Add all rack IDs this shelf controls
+  JsonArray racks = doc.createNestedArray("racks");
+  for (int i = 0; i < NUM_DOORS; i++) {
+    JsonObject rack = racks.createNestedObject();
+    rack["doorIndex"] = i;
+    rack["rackId"] = RACK_IDS[i];
+    rack["isLocked"] = doorLocked[i];
+    rack["itemPresent"] = itemPresent[i];
+  }
   
   String jsonStr;
   serializeJson(doc, jsonStr);
   
-  String message = "42[\"esp:register\"," + jsonStr + "]";
+  String message = "42[\"shelf:register\"," + jsonStr + "]";
   webSocket.sendTXT(message);
-  wsMessagesSent++;
   
-  logInfo("REG", "→ Registration sent");
-  if (DEBUG_WEBSOCKET) {
-    logDebug("REG", "Payload: " + jsonStr);
-  }
+  Serial.println("[REG] Registration sent");
 }
 
 // ============== SEND HEARTBEAT ==============
 void sendHeartbeat() {
-  if (!isConnected) return;
-  
-  StaticJsonDocument<256> doc;
-  doc["rackId"] = RACK_ID;
+  StaticJsonDocument<512> doc;
+  doc["shelfId"] = SHELF_ID;
   doc["uptime"] = millis() / 1000;
   doc["rssi"] = WiFi.RSSI();
   doc["freeHeap"] = ESP.getFreeHeap();
-  doc["isLocked"] = isLocked;
-  doc["itemPresent"] = itemPresent;
+  
+  // Include all door states
+  JsonArray doors = doc.createNestedArray("doors");
+  for (int i = 0; i < NUM_DOORS; i++) {
+    JsonObject door = doors.createNestedObject();
+    door["rackId"] = RACK_IDS[i];
+    door["locked"] = doorLocked[i];
+    door["item"] = itemPresent[i];
+  }
   
   String jsonStr;
   serializeJson(doc, jsonStr);
   
-  String message = "42[\"esp:heartbeat\"," + jsonStr + "]";
+  String message = "42[\"shelf:heartbeat\"," + jsonStr + "]";
   webSocket.sendTXT(message);
-  wsMessagesSent++;
-  
-  if (DEBUG_HEARTBEAT) {
-    logDebug("BEAT", "→ Heartbeat sent");
-  }
 }
 
 // ============== HANDLE INCOMING MESSAGES ==============
 void handleMessage(char* payload) {
   String msg = String(payload);
   
-  // Handle Socket.IO protocol messages
+  // Socket.IO handshake
   if (msg.startsWith("0")) {
-    // Engine.IO handshake - extract ping interval
-    logInfo("WS", "Engine.IO handshake received");
-    logDebug("WS", "Sending Socket.IO connect (40)...");
-    webSocket.sendTXT("40");  // Connect to default namespace
-    wsMessagesSent++;
+    Serial.println("[WS] Handshake received, connecting to namespace...");
+    webSocket.sendTXT("40");
     return;
   }
   
+  // Namespace connected
   if (msg.startsWith("40")) {
-    // Socket.IO connected to namespace - NOW we can register!
-    logInfo("WS", "✓ Socket.IO namespace connected!");
+    Serial.println("[WS] Namespace connected!");
     socketIOConnected = true;
     beep(1, 50);
     registerWithServer();
     return;
   }
   
+  // Ping/Pong
   if (msg == "2") {
-    // Engine.IO ping
-    webSocket.sendTXT("3");  // Pong
-    logVerbose("WS", "← Ping, → Pong");
+    webSocket.sendTXT("3");
     return;
   }
   
-  if (!msg.startsWith("42")) {
-    logDebug("WS", "Non-event message: " + msg.substring(0, 20));
-    return;
-  }
+  // Socket.IO events
+  if (!msg.startsWith("42")) return;
   
-  logInfo("MSG", "Processing Socket.IO event");
-  
-  // Parse Socket.IO event
-  int firstBracket = msg.indexOf('[');
-  int firstQuote = msg.indexOf('"', firstBracket);
+  // Parse event name
+  int firstQuote = msg.indexOf('"');
   int secondQuote = msg.indexOf('"', firstQuote + 1);
-  
-  if (firstQuote == -1 || secondQuote == -1) {
-    logWarn("MSG", "Invalid message format");
-    return;
-  }
+  if (firstQuote == -1 || secondQuote == -1) return;
   
   String eventName = msg.substring(firstQuote + 1, secondQuote);
-  logInfo("MSG", "Event: " + eventName);
   
+  // Parse data
   int dataStart = msg.indexOf(',', secondQuote);
   int dataEnd = msg.lastIndexOf(']');
   
   if (eventName == "locker:unlock") {
-    logInfo("CMD", "═══════════════════════════════════════");
-    logInfo("CMD", "  UNLOCK COMMAND RECEIVED");
-    logInfo("CMD", "═══════════════════════════════════════");
-    
-    if (dataStart != -1 && dataEnd != -1) {
-      String dataStr = msg.substring(dataStart + 1, dataEnd);
-      logDebug("CMD", "Data: " + dataStr);
-      
-      StaticJsonDocument<256> doc;
-      DeserializationError error = deserializeJson(doc, dataStr);
-      
-      if (error) {
-        logError("CMD", "JSON parse error: " + String(error.c_str()));
-        return;
-      }
-      
-      const char* targetRack = doc["rackId"];
-      logDebug("CMD", "Target rack: " + String(targetRack));
-      logDebug("CMD", "This rack: " + String(RACK_ID));
-      
-      if (String(targetRack) == String(RACK_ID)) {
-        logInfo("CMD", "✓ Command is for this rack - EXECUTING UNLOCK");
-        unlockLocker();
-      } else {
-        logWarn("CMD", "✗ Command is for different rack - IGNORING");
-      }
-    }
-  }
-  else if (eventName == "locker:lock") {
-    logInfo("CMD", "═══════════════════════════════════════");
-    logInfo("CMD", "  LOCK COMMAND RECEIVED");
-    logInfo("CMD", "═══════════════════════════════════════");
-    
     if (dataStart != -1 && dataEnd != -1) {
       String dataStr = msg.substring(dataStart + 1, dataEnd);
       
       StaticJsonDocument<256> doc;
-      DeserializationError error = deserializeJson(doc, dataStr);
-      
-      if (!error) {
+      if (deserializeJson(doc, dataStr) == DeserializationError::Ok) {
         const char* targetRack = doc["rackId"];
-        if (String(targetRack) == String(RACK_ID)) {
-          logInfo("CMD", "✓ Executing LOCK");
-          lockLocker();
+        
+        // Find which door this rack belongs to
+        int doorIndex = findDoorByRackId(targetRack);
+        
+        if (doorIndex >= 0) {
+          Serial.printf("\n[CMD] UNLOCK Door %d (%s)\n", doorIndex, targetRack);
+          unlockDoor(doorIndex);
+        } else {
+          Serial.printf("[CMD] Rack %s not on this shelf\n", targetRack);
         }
       }
     }
   }
-  else if (eventName == "locker:status") {
-    logInfo("CMD", "Status request received");
-    sendStatusUpdate();
+  else if (eventName == "locker:lock") {
+    if (dataStart != -1 && dataEnd != -1) {
+      String dataStr = msg.substring(dataStart + 1, dataEnd);
+      
+      StaticJsonDocument<256> doc;
+      if (deserializeJson(doc, dataStr) == DeserializationError::Ok) {
+        const char* targetRack = doc["rackId"];
+        
+        int doorIndex = findDoorByRackId(targetRack);
+        
+        if (doorIndex >= 0) {
+          Serial.printf("\n[CMD] LOCK Door %d (%s)\n", doorIndex, targetRack);
+          lockDoor(doorIndex);
+        }
+      }
+    }
   }
-  else if (eventName == "esp:registered") {
-    logInfo("REG", "✓ Server acknowledged registration!");
-  }
-  else {
-    logDebug("CMD", "Unknown event: " + eventName);
+  else if (eventName == "shelf:registered") {
+    Serial.println("[REG] Server acknowledged registration!");
   }
 }
 
-// ============== UNLOCK LOCKER ==============
-void unlockLocker() {
-  logInfo("LOCK", "┌─────────────────────────────────────┐");
-  logInfo("LOCK", "│         UNLOCKING SOLENOID          │");
-  logInfo("LOCK", "└─────────────────────────────────────┘");
-  
-  if (!isLocked) {
-    logWarn("LOCK", "Already unlocked - ignoring command");
+// ============== FIND DOOR BY RACK ID ==============
+int findDoorByRackId(const char* rackId) {
+  for (int i = 0; i < NUM_DOORS; i++) {
+    if (strcmp(RACK_IDS[i], rackId) == 0) {
+      return i;
+    }
+  }
+  return -1;  // Not found
+}
+
+// ============== UNLOCK DOOR ==============
+void unlockDoor(int doorIndex) {
+  if (doorIndex < 0 || doorIndex >= NUM_DOORS) {
+    Serial.printf("[ERROR] Invalid door index: %d\n", doorIndex);
     return;
   }
   
-  logDebug("RELAY", "Setting GPIO " + String(RELAY_PIN) + " to " + String(UNLOCK_STATE));
+  if (!doorLocked[doorIndex]) {
+    Serial.printf("[WARN] Door %d already unlocked\n", doorIndex);
+    return;
+  }
   
-  // Activate relay
-  digitalWrite(RELAY_PIN, UNLOCK_STATE);
-  isLocked = false;
-  unlockTime = millis();
-  lockUnlockCycles++;
+  Serial.printf("[UNLOCK] Door %d - GPIO %d → HIGH\n", doorIndex, RELAY_PINS[doorIndex]);
   
-  // Verify relay state
-  int relayState = digitalRead(RELAY_PIN);
-  logDebug("RELAY", "Relay pin state after write: " + String(relayState));
+  digitalWrite(RELAY_PINS[doorIndex], UNLOCK_STATE);
+  doorLocked[doorIndex] = false;
+  unlockTime[doorIndex] = millis();
   
-  // Feedback
-  digitalWrite(LED_PIN, HIGH);
   beep(1, 200);
   
   // Notify server
-  sendStatusUpdate();
+  sendDoorStatus(doorIndex);
   
-  logInfo("LOCK", "✓ UNLOCKED successfully");
-  logInfo("LOCK", "Will auto-lock in " + String(UNLOCK_DURATION / 1000) + " seconds");
+  Serial.printf("[UNLOCK] Door %d unlocked! Auto-lock in %d seconds\n", doorIndex, UNLOCK_DURATION / 1000);
 }
 
-// ============== LOCK LOCKER ==============
-void lockLocker() {
-  logInfo("LOCK", "┌─────────────────────────────────────┐");
-  logInfo("LOCK", "│          LOCKING SOLENOID           │");
-  logInfo("LOCK", "└─────────────────────────────────────┘");
-  
-  if (isLocked) {
-    logWarn("LOCK", "Already locked - ignoring command");
+// ============== LOCK DOOR ==============
+void lockDoor(int doorIndex) {
+  if (doorIndex < 0 || doorIndex >= NUM_DOORS) {
+    Serial.printf("[ERROR] Invalid door index: %d\n", doorIndex);
     return;
   }
   
-  unsigned long unlockedDuration = millis() - unlockTime;
-  logDebug("LOCK", "Was unlocked for: " + String(unlockedDuration / 1000) + " seconds");
+  if (doorLocked[doorIndex]) {
+    Serial.printf("[WARN] Door %d already locked\n", doorIndex);
+    return;
+  }
   
-  logDebug("RELAY", "Setting GPIO " + String(RELAY_PIN) + " to " + String(LOCK_STATE));
+  Serial.printf("[LOCK] Door %d - GPIO %d → LOW\n", doorIndex, RELAY_PINS[doorIndex]);
   
-  // Deactivate relay
-  digitalWrite(RELAY_PIN, LOCK_STATE);
-  isLocked = true;
+  digitalWrite(RELAY_PINS[doorIndex], LOCK_STATE);
+  doorLocked[doorIndex] = true;
   
-  // Verify relay state
-  int relayState = digitalRead(RELAY_PIN);
-  logDebug("RELAY", "Relay pin state after write: " + String(relayState));
-  
-  // Feedback
   beep(2, 100);
   
   // Notify server
-  sendStatusUpdate();
+  sendDoorStatus(doorIndex);
   
-  logInfo("LOCK", "✓ LOCKED successfully");
+  Serial.printf("[LOCK] Door %d locked!\n", doorIndex);
 }
 
-// ============== CHECK ITEM SENSOR (WITH DEBOUNCE) ==============
-void checkItemSensor() {
-  int rawReading = digitalRead(IR_SENSOR_PIN);
-  bool currentState = rawReading == LOW;  // LOW = object detected
-  
-  if (DEBUG_SENSOR) {
-    logVerbose("SENSOR", "Raw reading: " + String(rawReading) + " (" + String(currentState ? "PRESENT" : "EMPTY") + ")");
-  }
-  
-  // Check if state is different from last confirmed state
-  if (currentState != lastItemState) {
-    // If this is a new potential change, start debounce timer
-    if (!hasPendingChange || pendingSensorState != currentState) {
-      hasPendingChange = true;
-      pendingSensorState = currentState;
-      lastSensorChange = millis();
-      logDebug("SENSOR", "Potential change detected, waiting for debounce...");
-      return;
-    }
-    
-    // Check if debounce time has passed
-    if (millis() - lastSensorChange >= SENSOR_DEBOUNCE_TIME) {
-      // State is stable - confirm the change
-      hasPendingChange = false;
-      sensorChanges++;
-      lastItemState = currentState;
-      itemPresent = currentState;
-      
-      logInfo("SENSOR", "════════════════════════════════════");
-      logInfo("SENSOR", "  STATE CHANGE CONFIRMED (debounced)");
-      logInfo("SENSOR", "  New state: " + String(itemPresent ? "ITEM PRESENT" : "EMPTY"));
-      logInfo("SENSOR", "════════════════════════════════════");
-      
-      sendItemStatusUpdate();
-    }
-  } else {
-    // State matches confirmed state - cancel any pending change
-    if (hasPendingChange) {
-      logDebug("SENSOR", "State reverted before debounce - ignoring bounce");
-      hasPendingChange = false;
-    }
-  }
-}
-
-// ============== SEND STATUS UPDATE ==============
-void sendStatusUpdate() {
-  if (!isConnected) {
-    logWarn("STATUS", "Cannot send - not connected");
-    return;
-  }
+// ============== SEND DOOR STATUS ==============
+void sendDoorStatus(int doorIndex) {
+  if (!isConnected || !socketIOConnected) return;
   
   StaticJsonDocument<256> doc;
-  doc["rackId"] = RACK_ID;
-  doc["isLocked"] = isLocked;
-  doc["itemPresent"] = itemPresent;
-  doc["timestamp"] = millis();
+  doc["shelfId"] = SHELF_ID;
+  doc["rackId"] = RACK_IDS[doorIndex];
+  doc["doorIndex"] = doorIndex;
+  doc["isLocked"] = doorLocked[doorIndex];
+  doc["itemPresent"] = itemPresent[doorIndex];
   
   String jsonStr;
   serializeJson(doc, jsonStr);
   
   String message = "42[\"esp:status\"," + jsonStr + "]";
   webSocket.sendTXT(message);
-  wsMessagesSent++;
   
-  logInfo("STATUS", "→ Status update sent");
-  logDebug("STATUS", "Payload: " + jsonStr);
+  Serial.printf("[STATUS] Sent status for door %d\n", doorIndex);
 }
 
-// ============== SEND ITEM STATUS UPDATE ==============
-void sendItemStatusUpdate() {
-  if (!isConnected) {
-    logWarn("ITEM", "Cannot send - not connected");
-    return;
+// ============== CHECK ALL SENSORS ==============
+// Only compiled if IR_SENSORS_ENABLED is true
+#if IR_SENSORS_ENABLED
+void checkAllSensors() {
+  for (int i = 0; i < NUM_DOORS; i++) {
+    if (IR_SENSOR_PINS[i] < 0) continue;  // Skip if no sensor
+    
+    bool currentState = digitalRead(IR_SENSOR_PINS[i]) == LOW;
+    
+    // Debounce logic
+    if (currentState != lastItemState[i]) {
+      if (!hasPendingChange[i] || pendingSensorState[i] != currentState) {
+        hasPendingChange[i] = true;
+        pendingSensorState[i] = currentState;
+        lastSensorChange[i] = millis();
+        continue;
+      }
+      
+      if (millis() - lastSensorChange[i] >= SENSOR_DEBOUNCE_TIME) {
+        hasPendingChange[i] = false;
+        lastItemState[i] = currentState;
+        itemPresent[i] = currentState;
+        
+        Serial.printf("[SENSOR] Door %d (%s): %s\n", 
+          i, RACK_IDS[i], 
+          itemPresent[i] ? "ITEM PRESENT" : "EMPTY");
+        
+        sendItemStatus(i);
+      }
+    } else {
+      hasPendingChange[i] = false;
+    }
   }
+}
+#endif
+
+// ============== SEND ITEM STATUS ==============
+// Only compiled if IR_SENSORS_ENABLED is true
+#if IR_SENSORS_ENABLED
+void sendItemStatus(int doorIndex) {
+  if (!isConnected || !socketIOConnected) return;
   
   StaticJsonDocument<256> doc;
-  doc["rackId"] = RACK_ID;
-  doc["itemPresent"] = itemPresent;
-  doc["needsRefill"] = !itemPresent;
+  doc["shelfId"] = SHELF_ID;
+  doc["rackId"] = RACK_IDS[doorIndex];
+  doc["doorIndex"] = doorIndex;
+  doc["itemPresent"] = itemPresent[doorIndex];
+  doc["needsRefill"] = !itemPresent[doorIndex];
   
   String jsonStr;
   serializeJson(doc, jsonStr);
   
   String message = "42[\"esp:itemStatus\"," + jsonStr + "]";
   webSocket.sendTXT(message);
-  wsMessagesSent++;
-  
-  logInfo("ITEM", "→ Item status sent: " + String(itemPresent ? "present" : "needs refill"));
 }
+#endif
 
 // ============== BUZZER ==============
 void beep(int times, int duration) {
-  if (DEBUG_RELAY) {
-    logDebug("BUZZER", "Beeping " + String(times) + " times, " + String(duration) + "ms each");
-  }
-  
   for (int i = 0; i < times; i++) {
     digitalWrite(BUZZER_PIN, HIGH);
     delay(duration);
@@ -788,160 +601,115 @@ void beep(int times, int duration) {
   }
 }
 
-// ============== SERIAL COMMAND HANDLER ==============
+// ============== SERIAL COMMANDS ==============
 void handleSerialCommands() {
-  while (Serial.available()) {
-    char c = Serial.read();
-    
-    switch (c) {
-      case 'u':
-      case 'U':
-        Serial.println("\n>>> MANUAL UNLOCK COMMAND <<<");
-        unlockLocker();
-        break;
-        
-      case 'l':
-      case 'L':
-        Serial.println("\n>>> MANUAL LOCK COMMAND <<<");
-        lockLocker();
-        break;
-        
-      case 's':
-      case 'S':
-        printFullStatus();
-        break;
-        
-      case 'r':
-      case 'R':
-        Serial.println("\n>>> MANUAL RECONNECT <<<");
-        webSocket.disconnect();
-        delay(1000);
-        connectWebSocket();
-        break;
-        
-      case 'd':
-      case 'D':
-        debugMode = !debugMode;
-        Serial.println("\n>>> DEBUG MODE: " + String(debugMode ? "ENABLED" : "DISABLED") + " <<<");
-        break;
-        
-      case 'h':
-      case 'H':
-        printHelp();
-        break;
-        
-      case 't':
-      case 'T':
-        testHardware();
-        break;
-        
-      case '+':
-        if (currentLogLevel < LOG_VERBOSE) {
-          currentLogLevel++;
-          Serial.println("\n>>> Log level increased to: " + String(currentLogLevel));
-        }
-        break;
-        
-      case '-':
-        if (currentLogLevel > LOG_ERROR) {
-          currentLogLevel--;
-          Serial.println("\n>>> Log level decreased to: " + String(currentLogLevel));
-        }
-        break;
-        
-      case '\n':
-      case '\r':
-        // Ignore newlines
-        break;
-        
-      default:
-        Serial.println("\n>>> Unknown command: '" + String(c) + "' - Press 'h' for help");
-        break;
+  if (!Serial.available()) return;
+  
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  
+  if (cmd.length() == 0) return;
+  
+  char action = cmd.charAt(0);
+  
+  if (action == 's' || action == 'S') {
+    // Print status
+    printStatus();
+  }
+  else if (action == 'u' || action == 'U') {
+    // Unlock: u0, u1, u2, ... or U0, U1, ...
+    if (cmd.length() > 1) {
+      int doorIndex = cmd.substring(1).toInt();
+      Serial.printf("\n>>> MANUAL UNLOCK Door %d <<<\n", doorIndex);
+      unlockDoor(doorIndex);
+    } else {
+      Serial.println("Usage: u<door_number> (e.g., u0, u5)");
     }
+  }
+  else if (action == 'l' || action == 'L') {
+    // Lock: l0, l1, l2, ...
+    if (cmd.length() > 1) {
+      int doorIndex = cmd.substring(1).toInt();
+      Serial.printf("\n>>> MANUAL LOCK Door %d <<<\n", doorIndex);
+      lockDoor(doorIndex);
+    } else {
+      Serial.println("Usage: l<door_number> (e.g., l0, l5)");
+    }
+  }
+  else if (action == 't' || action == 'T') {
+    // Test all doors
+    testAllDoors();
+  }
+  else if (action == 'r' || action == 'R') {
+    // Reconnect
+    Serial.println("\n>>> RECONNECTING <<<");
+    webSocket.disconnect();
+    delay(1000);
+    connectWebSocket();
+  }
+  else if (action == 'h' || action == 'H') {
+    printHelp();
+  }
+  else {
+    Serial.println("Unknown command. Type 'h' for help.");
   }
 }
 
-void printFullStatus() {
-  unsigned long uptime = millis() / 1000;
+void printStatus() {
+  Serial.println("\n╔═══════════════════════════════════════════════════════════╗");
+  Serial.println("║                    SHELF STATUS                           ║");
+  Serial.println("╠═══════════════════════════════════════════════════════════╣");
+  Serial.printf("║ Shelf ID:     %s                                    ║\n", SHELF_ID);
+  Serial.printf("║ WiFi:         %s (RSSI: %d dBm)                     ║\n", 
+    WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected", WiFi.RSSI());
+  Serial.printf("║ WebSocket:    %s                                    ║\n", 
+    socketIOConnected ? "Connected" : "Disconnected");
+  Serial.printf("║ Uptime:       %lu seconds                           ║\n", millis() / 1000);
+  Serial.println("╠═══════════════════════════════════════════════════════════╣");
+  Serial.println("║ Door  │ Rack ID   │ Status   │ Item    │ Relay Pin       ║");
+  Serial.println("╠═══════════════════════════════════════════════════════════╣");
   
-  Serial.println("\n╔════════════════════════════════════════════════════════╗");
-  Serial.println("║              FULL SYSTEM STATUS                        ║");
-  Serial.println("╠════════════════════════════════════════════════════════╣");
-  Serial.printf("║ Uptime:            %lu seconds                          \n", uptime);
-  Serial.printf("║ Free Heap:         %d bytes                             \n", ESP.getFreeHeap());
-  Serial.printf("║ Min Free Heap:     %d bytes                             \n", ESP.getMinFreeHeap());
-  Serial.println("╠═══════════════════ NETWORK ═════════════════════════════╣");
-  Serial.printf("║ WiFi Status:       %s                                   \n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
-  Serial.printf("║ IP Address:        %s                                   \n", WiFi.localIP().toString().c_str());
-  Serial.printf("║ RSSI:              %d dBm                               \n", WiFi.RSSI());
-  Serial.printf("║ WebSocket:         %s                                   \n", isConnected ? "Connected" : "Disconnected");
-  Serial.println("╠═══════════════════ HARDWARE ════════════════════════════╣");
-  Serial.printf("║ Lock State:        %s                                   \n", isLocked ? "LOCKED" : "UNLOCKED");
-  Serial.printf("║ Relay Pin:         GPIO %d = %d                          \n", RELAY_PIN, digitalRead(RELAY_PIN));
-  Serial.printf("║ IR Sensor:         GPIO %d = %d                          \n", IR_SENSOR_PIN, digitalRead(IR_SENSOR_PIN));
-  Serial.printf("║ Item Present:      %s                                   \n", itemPresent ? "Yes" : "No");
-  Serial.println("╠═══════════════════ STATISTICS ══════════════════════════╣");
-  Serial.printf("║ WS Messages Rx:    %lu                                  \n", wsMessagesReceived);
-  Serial.printf("║ WS Messages Tx:    %lu                                  \n", wsMessagesSent);
-  Serial.printf("║ WiFi Reconnects:   %lu                                  \n", wifiReconnects);
-  Serial.printf("║ WS Reconnects:     %lu                                  \n", wsReconnects);
-  Serial.printf("║ Lock/Unlock:       %lu cycles                           \n", lockUnlockCycles);
-  Serial.printf("║ Sensor Changes:    %lu                                  \n", sensorChanges);
-  Serial.println("╚════════════════════════════════════════════════════════╝\n");
+  for (int i = 0; i < NUM_DOORS; i++) {
+    Serial.printf("║  %2d   │ %-9s │ %-8s │ %-7s │ GPIO %-2d         ║\n",
+      i,
+      RACK_IDS[i],
+      doorLocked[i] ? "LOCKED" : "UNLOCKED",
+      itemPresent[i] ? "Yes" : "No",
+      RELAY_PINS[i]
+    );
+  }
+  
+  Serial.println("╚═══════════════════════════════════════════════════════════╝\n");
 }
 
 void printHelp() {
   Serial.println("\n╔════════════════════════════════════════════════════════╗");
-  Serial.println("║              SERIAL COMMANDS HELP                      ║");
+  Serial.println("║                 SERIAL COMMANDS                        ║");
   Serial.println("╠════════════════════════════════════════════════════════╣");
-  Serial.println("║  u/U  - Unlock solenoid                                ║");
-  Serial.println("║  l/L  - Lock solenoid                                  ║");
-  Serial.println("║  s/S  - Print full status                              ║");
-  Serial.println("║  r/R  - Reconnect WebSocket                            ║");
-  Serial.println("║  d/D  - Toggle debug mode                              ║");
-  Serial.println("║  t/T  - Test all hardware                              ║");
-  Serial.println("║  h/H  - Show this help                                 ║");
-  Serial.println("║  +    - Increase log verbosity                         ║");
-  Serial.println("║  -    - Decrease log verbosity                         ║");
+  Serial.println("║  u<n>  - Unlock door n (e.g., u0, u5, u11)             ║");
+  Serial.println("║  l<n>  - Lock door n (e.g., l0, l5)                    ║");
+  Serial.println("║  s     - Print status of all doors                    ║");
+  Serial.println("║  t     - Test all doors (unlock/lock cycle)           ║");
+  Serial.println("║  r     - Reconnect WebSocket                          ║");
+  Serial.println("║  h     - Show this help                               ║");
   Serial.println("╚════════════════════════════════════════════════════════╝\n");
 }
 
-void testHardware() {
-  Serial.println("\n╔════════════════════════════════════════════════════════╗");
-  Serial.println("║              HARDWARE TEST SEQUENCE                    ║");
-  Serial.println("╚════════════════════════════════════════════════════════╝\n");
+void testAllDoors() {
+  Serial.println("\n>>> TESTING ALL DOORS <<<\n");
   
-  // Test LED
-  Serial.println("1. Testing LED...");
-  for (int i = 0; i < 5; i++) {
-    digitalWrite(LED_PIN, HIGH);
-    delay(200);
-    digitalWrite(LED_PIN, LOW);
+  for (int i = 0; i < NUM_DOORS; i++) {
+    Serial.printf("Testing Door %d (%s)...\n", i, RACK_IDS[i]);
+    
+    // Unlock
+    digitalWrite(RELAY_PINS[i], UNLOCK_STATE);
+    delay(500);
+    
+    // Lock
+    digitalWrite(RELAY_PINS[i], LOCK_STATE);
     delay(200);
   }
-  Serial.println("   ✓ LED test complete\n");
   
-  // Test Buzzer
-  Serial.println("2. Testing Buzzer...");
-  beep(3, 150);
-  Serial.println("   ✓ Buzzer test complete\n");
-  
-  // Test Relay (unlock/lock cycle)
-  Serial.println("3. Testing Relay/Solenoid...");
-  Serial.println("   - Unlocking for 2 seconds...");
-  digitalWrite(RELAY_PIN, UNLOCK_STATE);
-  delay(2000);
-  Serial.println("   - Locking...");
-  digitalWrite(RELAY_PIN, LOCK_STATE);
-  Serial.println("   ✓ Relay test complete\n");
-  
-  // Test IR Sensor
-  Serial.println("4. Testing IR Sensor...");
-  Serial.printf("   Current reading: %d\n", digitalRead(IR_SENSOR_PIN));
-  Serial.printf("   Interpreted as: %s\n", digitalRead(IR_SENSOR_PIN) == LOW ? "ITEM PRESENT" : "EMPTY");
-  Serial.println("   ✓ Sensor test complete\n");
-  
-  Serial.println("═══════════════════════════════════════════════════════════");
-  Serial.println("  ALL HARDWARE TESTS COMPLETE");
-  Serial.println("═══════════════════════════════════════════════════════════\n");
+  Serial.println("\n>>> ALL DOORS TESTED <<<\n");
+  beep(2, 100);
 }
