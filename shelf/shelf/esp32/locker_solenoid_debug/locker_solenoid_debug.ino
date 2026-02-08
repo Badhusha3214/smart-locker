@@ -38,6 +38,7 @@ const char* WIFI_PASSWORD = "Robot123";
 const char* SERVER_HOST = "35.225.93.34";  //10.229.233.58
 const int SERVER_PORT = 5000;
 const bool USE_SSL = false;
+
 // Shelf Configuration
 const char* SHELF_ID = "SHELF_001";     // Unique shelf identifier
 const int NUM_DOORS = 9;                 // Number of doors on this shelf (9 or 12)
@@ -279,8 +280,8 @@ void connectWiFi() {
 void connectWebSocket() {
   Serial.printf("[WS] Connecting to %s:%d\n", SERVER_HOST, SERVER_PORT);
   
-  String wsPath = "/socket.io/?EIO=4&transport=websocket";
-  
+String wsPath = "/socket.io/?EIO=4&transport=websocket";
+
   if (USE_SSL) {
     webSocket.beginSSL(SERVER_HOST, 443, wsPath.c_str());
   } else {
