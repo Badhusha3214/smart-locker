@@ -27,23 +27,11 @@ app.use(helmet({
   crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }
 }));
 
-// CORS - Allow multiple origins
-const allowedOrigins = [
-  // Development
-  'http://localhost:5173',
-  'http://localhost:5174',
-  'http://127.0.0.1:5173',
-  'http://127.0.0.1:5174',
-  // Production (from environment)
-  process.env.FRONTEND_URL,
-  // Additional origins from CORS_ORIGINS env variable
-  ...(process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map(s => s.trim()) : [])
-].filter(Boolean);
 
-console.log('Allowed CORS origins:', allowedOrigins);
 
+// CORS - Allow all origins (for prototyping only)
 app.use(cors({
-  origin: true, // Allow all origins temporarily for debugging
+  origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
