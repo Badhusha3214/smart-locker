@@ -14,13 +14,14 @@ class WebSocketService {
 
     const wsUrl = import.meta.env.VITE_WS_URL || 'http://localhost:3000'
     
-    this.socket = io(wsUrl, {
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: this.maxReconnectAttempts,
-      reconnectionDelay: 1000,
-      auth: token ? { token } : {}
-    })
+      this.socket = io(wsUrl, {
+        transports: ['polling'], // Use only HTTP polling
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        reconnectionAttempts: 5,
+        auth: token ? { token } : {}
+      })
 
     this.socket.on('connect', () => {
       console.log('[WS] Connected')

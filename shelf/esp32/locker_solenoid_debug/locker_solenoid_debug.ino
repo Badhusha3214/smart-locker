@@ -29,15 +29,16 @@
  */
 
 #include <WiFi.h>
-#include <WebSocketsClient.h>
+#include <SocketIOclient.h>  // Changed from WebSocketsClient.h
 #include <ArduinoJson.h>
 
 // ============== CONFIGURATION ==============
 const char* WIFI_SSID = "Robot";
 const char* WIFI_PASSWORD = "Robot123";
-const char* SERVER_HOST = "35.225.93.34";  //10.229.233.58
+const char* SERVER_HOST = "35.225.93.34";  //35.225.93.34
 const int SERVER_PORT = 5000;
 const bool USE_SSL = false;
+
 // Shelf Configuration
 const char* SHELF_ID = "SHELF_001";     // Unique shelf identifier
 const int NUM_DOORS = 9;                 // Number of doors on this shelf (9 or 12)
@@ -111,7 +112,7 @@ const int IR_SENSOR_PINS[12] = {
 #define SENSOR_DEBOUNCE_TIME 500
 
 // ============== GLOBAL VARIABLES ==============
-WebSocketsClient webSocket;
+SocketIOclient socketIO;  // Changed from WebSocketsClient
 
 // Door states
 bool doorLocked[12];          // Lock state for each door
@@ -210,7 +211,7 @@ void initializeHardware() {
 
 // ============== MAIN LOOP ==============
 void loop() {
-  webSocket.loop();
+  socketIO.loop();  // Changed from webSocket.loop()
   
   // Check WiFi
   if (WiFi.status() != WL_CONNECTED) {
@@ -278,42 +279,40 @@ void connectWiFi() {
 // ============== WEBSOCKET CONNECTION ==============
 void connectWebSocket() {
   Serial.printf("[WS] Connecting to %s:%d\n", SERVER_HOST, SERVER_PORT);
-  
-  String wsPath = "/socket.io/?EIO=4&transport=websocket";
-  
-  if (USE_SSL) {
-    webSocket.beginSSL(SERVER_HOST, 443, wsPath.c_str());
-  } else {
-    webSocket.begin(SERVER_HOST, SERVER_PORT, wsPath.c_str());
-  }
-  
-  webSocket.onEvent(webSocketEvent);
-  webSocket.setReconnectInterval(RECONNECT_INTERVAL);
-  webSocket.enableHeartbeat(25000, 5000, 2);
+
+  // Socket.IO v4 connection
+  socketIO.begin(SERVER_HOST, SERVER_PORT, "/socket.io/?EIO=4");
+
+  socketIO.onEvent(webSocketEvent);
 }
 
 // ============== WEBSOCKET EVENT HANDLER ==============
-void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
+void webSocketEvent(socketIOmessageType_t type, uint8_t* payload, size_t length) {
   switch (type) {
-    case WStype_DISCONNECTED:
+    case sIOtype_DISCONNECT:
       Serial.println("[WS] Disconnected");
       isConnected = false;
       socketIOConnected = false;
       break;
       
-    case WStype_CONNECTED:
+    case sIOtype_CONNECT:
       Serial.println("[WS] Connected!");
       isConnected = true;
-      socketIOConnected = false;
+      socketIOConnected = true;
+      beep(1, 50);
+      registerWithServer();
       break;
       
-    case WStype_TEXT:
-      handleMessage((char*)payload);
+    case sIOtype_EVENT:
+      Serial.printf("[WS] Event: %s\n", payload);
+      handleSocketIOEvent((char*)payload);
       break;
       
     default:
+      Serial.printf("[WS] Type: %d, Payload: %s\n", type, payload);
       break;
   }
+}
 }
 
 // ============== REGISTER WITH SERVER ==============
@@ -327,7 +326,6 @@ void registerWithServer() {
   doc["ip"] = WiFi.localIP().toString();
   doc["rssi"] = WiFi.RSSI();
   
-  // Add all rack IDs this shelf controls
   JsonArray racks = doc.createNestedArray("racks");
   for (int i = 0; i < NUM_DOORS; i++) {
     JsonObject rack = racks.createNestedObject();
@@ -340,8 +338,8 @@ void registerWithServer() {
   String jsonStr;
   serializeJson(doc, jsonStr);
   
-  String message = "42[\"shelf:register\"," + jsonStr + "]";
-  webSocket.sendTXT(message);
+  // Use emit instead of sendTXT
+  socketIO.emit("shelf:register", jsonStr.c_str());
   
   Serial.println("[REG] Registration sent");
 }
@@ -366,90 +364,49 @@ void sendHeartbeat() {
   String jsonStr;
   serializeJson(doc, jsonStr);
   
-  String message = "42[\"shelf:heartbeat\"," + jsonStr + "]";
-  webSocket.sendTXT(message);
+  socketIO.emit("shelf:heartbeat", jsonStr.c_str());
 }
 
 // ============== HANDLE INCOMING MESSAGES ==============
-void handleMessage(char* payload) {
+void handleSocketIOEvent(char* payload) {
   String msg = String(payload);
   
-  // Socket.IO handshake
-  if (msg.startsWith("0")) {
-    Serial.println("[WS] Handshake received, connecting to namespace...");
-    webSocket.sendTXT("40");
+  Serial.printf("[EVENT] Received: %s\n", msg.c_str());
+  
+  // Parse JSON array format: ["event_name", {...data...}]
+  StaticJsonDocument<512> doc;
+  DeserializationError error = deserializeJson(doc, payload);
+  
+  if (error) {
+    Serial.printf("[ERROR] JSON parse failed: %s\n", error.c_str());
     return;
   }
   
-  // Namespace connected
-  if (msg.startsWith("40")) {
-    Serial.println("[WS] Namespace connected!");
-    socketIOConnected = true;
-    beep(1, 50);
-    registerWithServer();
-    return;
-  }
+  // Get event name
+  const char* eventName = doc[0];
   
-  // Ping/Pong
-  if (msg == "2") {
-    webSocket.sendTXT("3");
-    return;
-  }
-  
-  // Socket.IO events
-  if (!msg.startsWith("42")) return;
-  
-  // Parse event name
-  int firstQuote = msg.indexOf('"');
-  int secondQuote = msg.indexOf('"', firstQuote + 1);
-  if (firstQuote == -1 || secondQuote == -1) return;
-  
-  String eventName = msg.substring(firstQuote + 1, secondQuote);
-  
-  // Parse data
-  int dataStart = msg.indexOf(',', secondQuote);
-  int dataEnd = msg.lastIndexOf(']');
-  
-  if (eventName == "locker:unlock") {
-    if (dataStart != -1 && dataEnd != -1) {
-      String dataStr = msg.substring(dataStart + 1, dataEnd);
-      
-      StaticJsonDocument<256> doc;
-      if (deserializeJson(doc, dataStr) == DeserializationError::Ok) {
-        const char* targetRack = doc["rackId"];
-        
-        // Find which door this rack belongs to
-        int doorIndex = findDoorByRackId(targetRack);
-        
-        if (doorIndex >= 0) {
-          Serial.printf("\n[CMD] UNLOCK Door %d (%s)\n", doorIndex, targetRack);
-          unlockDoor(doorIndex);
-        } else {
-          Serial.printf("[CMD] Rack %s not on this shelf\n", targetRack);
-        }
-      }
+  if (strcmp(eventName, "locker:unlock") == 0) {
+    const char* targetRack = doc[1]["rackId"];
+    int doorIndex = findDoorByRackId(targetRack);
+    
+    if (doorIndex >= 0) {
+      Serial.printf("\n[CMD] UNLOCK Door %d (%s)\n", doorIndex, targetRack);
+      unlockDoor(doorIndex);
     }
   }
-  else if (eventName == "locker:lock") {
-    if (dataStart != -1 && dataEnd != -1) {
-      String dataStr = msg.substring(dataStart + 1, dataEnd);
-      
-      StaticJsonDocument<256> doc;
-      if (deserializeJson(doc, dataStr) == DeserializationError::Ok) {
-        const char* targetRack = doc["rackId"];
-        
-        int doorIndex = findDoorByRackId(targetRack);
-        
-        if (doorIndex >= 0) {
-          Serial.printf("\n[CMD] LOCK Door %d (%s)\n", doorIndex, targetRack);
-          lockDoor(doorIndex);
-        }
-      }
+  else if (strcmp(eventName, "locker:lock") == 0) {
+    const char* targetRack = doc[1]["rackId"];
+    int doorIndex = findDoorByRackId(targetRack);
+    
+    if (doorIndex >= 0) {
+      Serial.printf("\n[CMD] LOCK Door %d (%s)\n", doorIndex, targetRack);
+      lockDoor(doorIndex);
     }
   }
-  else if (eventName == "shelf:registered") {
+  else if (strcmp(eventName, "shelf:registered") == 0) {
     Serial.println("[REG] Server acknowledged registration!");
   }
+}
 }
 
 // ============== FIND DOOR BY RACK ID ==============
@@ -527,8 +484,7 @@ void sendDoorStatus(int doorIndex) {
   String jsonStr;
   serializeJson(doc, jsonStr);
   
-  String message = "42[\"esp:status\"," + jsonStr + "]";
-  webSocket.sendTXT(message);
+  socketIO.emit("esp:status", jsonStr.c_str());
   
   Serial.printf("[STATUS] Sent status for door %d\n", doorIndex);
 }
@@ -585,8 +541,7 @@ void sendItemStatus(int doorIndex) {
   String jsonStr;
   serializeJson(doc, jsonStr);
   
-  String message = "42[\"esp:itemStatus\"," + jsonStr + "]";
-  webSocket.sendTXT(message);
+  socketIO.emit("esp:itemStatus", jsonStr.c_str());
 }
 #endif
 
@@ -642,7 +597,7 @@ void handleSerialCommands() {
   else if (action == 'r' || action == 'R') {
     // Reconnect
     Serial.println("\n>>> RECONNECTING <<<");
-    webSocket.disconnect();
+    socketIO.disconnect();
     delay(1000);
     connectWebSocket();
   }

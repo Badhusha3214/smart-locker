@@ -35,9 +35,9 @@
 // ============== CONFIGURATION ==============
 const char* WIFI_SSID = "Robot";
 const char* WIFI_PASSWORD = "Robot123";
-const char* SERVER_HOST = "10.229.233.58";  //35.225.93.34
-const int SERVER_PORT = 5000;
-const bool USE_SSL = false;
+const char* SERVER_HOST = "smart-locker-c3vr.onrender.com";
+const int SERVER_PORT = 443;
+const bool USE_SSL = true;
 
 // Shelf Configuration
 const char* SHELF_ID = "SHELF_001";     // Unique shelf identifier
@@ -278,16 +278,13 @@ void connectWiFi() {
 
 // ============== WEBSOCKET CONNECTION ==============
 void connectWebSocket() {
-  Serial.printf("[WS] Connecting to %s:%d\n", SERVER_HOST, SERVER_PORT);
-  
-String wsPath = "/socket.io/?EIO=3&transport=websocket";
-
+  Serial.printf("[WS] Connecting to %s:%d (SSL: %s)\n", SERVER_HOST, SERVER_PORT, USE_SSL ? "true" : "false");
+  String wsPath = "/socket.io/?EIO=3&transport=websocket";
   if (USE_SSL) {
-    webSocket.beginSSL(SERVER_HOST, 443, wsPath.c_str());
+    webSocket.beginSSL(SERVER_HOST, SERVER_PORT, wsPath.c_str());
   } else {
     webSocket.begin(SERVER_HOST, SERVER_PORT, wsPath.c_str());
   }
-  
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(RECONNECT_INTERVAL);
   webSocket.enableHeartbeat(25000, 5000, 2);

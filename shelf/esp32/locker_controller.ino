@@ -26,6 +26,11 @@ const char* SERVER_HOST = "smart-locker-c3vr.onrender.com";  // Production backe
 const int SERVER_PORT = 443; // HTTPS port
 const bool USE_SSL = true;   // Enable SSL for production
 
+// For self-signed certificates (development only):
+#include <WiFiClientSecure.h>
+// Set to true to skip certificate validation (not secure for production)
+const bool INSECURE_SSL = true;
+
 // Rack Configuration - Each ESP32 controls one rack
 const char* RACK_ID = "RACK_001";  // Must match MongoDB rack ID
 
@@ -156,6 +161,9 @@ void connectWebSocket() {
   
   // Socket.IO uses /socket.io/ path with specific query params
   webSocket.beginSocketIO(SERVER_HOST, SERVER_PORT, "/socket.io/?EIO=4");
+  if (USE_SSL && INSECURE_SSL) {
+    webSocket.setInsecure(); // Accept self-signed certs (for dev only)
+  }
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(RECONNECT_INTERVAL);
 }
