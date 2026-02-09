@@ -60,7 +60,7 @@ const initializeWebSocket = (server) => {
       methods: ['GET', 'POST'],
       credentials: true
     },
-    transports: ['websocket', 'polling'],
+    transports: ['polling'],
     allowEIO3: true,
     pingTimeout: 60000,
     pingInterval: 25000
